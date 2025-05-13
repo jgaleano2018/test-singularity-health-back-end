@@ -4,13 +4,7 @@ import  { graphqlHTTP } from 'express-graphql';
 import { GraphQLScalarType, Kind, buildSchema } from 'graphql';
 import mysql from 'mysql2';
 import cors from 'cors';
-import bcrypt from 'bcrypt'
-
-import AppUser_TB from "./database/models/appUser_TB.model.js";
-import ContactInfo_TB from "./database/models/contactInfo_TB.model.js";
-import Country_TB from "./database/models/country_TB.model.js";
-import TypeDocument_TB from "./database/models/typeDocument_TB.model.js";
-import UserDocument_TB from "./database/models/userDocument_TB.model.js";
+import crypto from 'crypto';
 
 //const Op = db.Sequelize.Op;
 
@@ -119,7 +113,36 @@ const queryDB = (req, sql, args) => new Promise((resolve, reject) => {
       if (err) return reject(err);
       rows.changedRows || rows.affectedRows || rows.insertId ? resolve(true) : resolve(rows);
   });
-});  
+}); 
+
+const encrypt = (plainText, password) => {
+  try {
+    const iv = crypto.randomBytes(16);
+    const key = crypto.createHash('sha256').update(password).digest('base64').substr(0, 32);
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    let encrypted = cipher.update(plainText);
+    encrypted = Buffer.concat([encrypted, cipher.final()])
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+  } catch (error) {
+    console.log(error);
+  }
+}
+
+const decrypt = (encryptedText, password) => {
+  try {
+    const textParts = encryptedText.split(':');
+    const iv = Buffer.from(textParts.shift(), 'hex');
+    const encryptedData = Buffer.from(textParts.join(':'), 'hex');
+    const key = crypto.createHash('sha256').update(password).digest('base64').substr(0, 32);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    
+    const decrypted = decipher.update(encryptedData);
+    const decryptedText = Buffer.concat([decrypted, decipher.final()]);
+    return decryptedText.toString();
+  } catch (error) {
+    console.log(error)
+  }
+}
 
 const root = {
   getCountries: (args, req) => queryDB(req, "select * from country_tb").then(data => data),
@@ -137,19 +160,19 @@ const root = {
         "TimeCreate": args.timeCreate,
         "IsTemporal": args.isTemporal,
         "UserName": args.userName,
-        "Password": args.password,
+        "Password": encrypt(args.verificationToken, args.password),
         "Email": args.email,
         "EmailVerified": args.emailVerified,
         "VerificationToken": args.verificationToken
     }
 
-    queryDB(req, "SELECT * FROM appuser_tb AU INNER JOIN userdocument_tb US ON US.UserId = AU.Id WHERE AU.Name = ? AND AU.LastName = ? AND AU.UserName = ? AND AU.Password = ? AND US.Document = ?", [args.name, args.lastName, args.userName, args.password, args.document]).then(data =>
+    queryDB(req, "SELECT * FROM appuser_tb AU INNER JOIN userdocument_tb US ON US.UserId = AU.Id WHERE AU.Name = ? AND AU.LastName = ? AND AU.UserName = ? AND US.Document = ?", [args.name, args.lastName, args.userName, args.document]).then(data =>
         {
             if (data.length === 0) {
 
                 queryDB(req, "insert into appuser_tb SET ?", userJson).then(data2 => {
 
-                queryDB(req, "SELECT max(AU.id) AS UserId FROM appuser_tb AU WHERE AU.Name = ? AND AU.LastName = ? AND AU.UserName = ? AND AU.Password = ?", [args.name, args.lastName, args.userName, args.password]).then(data3 =>
+                queryDB(req, "SELECT max(AU.id) AS UserId FROM appuser_tb AU WHERE AU.Name = ? AND AU.LastName = ? AND AU.UserName = ?", [args.name, args.lastName, args.userName]).then(data3 =>
                 {
                     if (data3.length > 0) {
                         let userDocumentJson = {
